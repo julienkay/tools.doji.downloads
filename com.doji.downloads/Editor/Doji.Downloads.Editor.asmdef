@@ -1,0 +1,18 @@
+{
+    "name": "Doji.Downloads.Editor",
+    "rootNamespace": "Doji.Downloads.Editor",
+    "references": [
+        "GUID:33634f0321224cbab008d083a50cd823"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,11 @@
+apiRules:
+- include: # The namespaces to generate
+    uidRegex: ^Doji\.Downloads
+    type: Namespace
+- include:
+    uidRegex: ^Global
+    type: Namespace
+- exclude:
+    uidRegex: ^Doji\.Downloads\.Editor
+- exclude:
+    uidRegex: ^Doji\.Downloads\.Samples

@@ -1,0 +1,82 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using NUnit.Framework;
+
+namespace Doji.Downloads.Editor.Tests
+{
+    /// <summary>
+    /// Covers generic sequential queue executor independent from HF Hub-specific model sync work.
+    /// </summary>
+    internal sealed class DownloadEditorPersistentItemQueueExecutorTests
+    {
+        [Test]
+        public async Task ExecuteAsync_ProcessesItemsInOrderAndClearsStateOnSuccess()
+        {
+            var state = PersistentItemQueueState.Create(new[] { "a", "b" });
+            var processed = new List<string>();
+            var savedSnapshots = new List<(string CurrentItemKey, string PendingKeys)>();
+            var context = CreateContext();
+
+            await EditorPersistentItemQueueExecutor.ExecuteAsync(
+                state,
+                new[] { "a", "b" },
+                item => item,
+                queueState => savedSnapshots.Add((queueState.CurrentItemKey, string.Join(",", queueState.PendingItemKeys))),
+                (item, index, totalCount, operationContext) =>
+                {
+                    processed.Add($"{index}/{totalCount}:{item}");
+                    return Task.CompletedTask;
+                },
+                context);
+
+            Assert.That(processed, Is.EqualTo(new[] { "0/2:a", "1/2:b" }));
+            Assert.That(state.CurrentItemKey, Is.Null);
+            Assert.That(state.PendingItemKeys, Is.Empty);
+            Assert.That(savedSnapshots, Is.EqualTo(new[]
+            {
+                ("a", "a,b"),
+                (null, "b"),
+                ("b", "b"),
+                (null, string.Empty)
+            }));
+        }
+
+        [Test]
+        public void ExecuteAsync_LeavesCurrentItemAndPendingQueueOnFailure()
+        {
+            var state = PersistentItemQueueState.Create(new[] { "a", "b" });
+            var savedSnapshots = new List<(string CurrentItemKey, string PendingKeys)>();
+            var context = CreateContext();
+
+            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            {
+                await EditorPersistentItemQueueExecutor.ExecuteAsync(
+                    state,
+                    new[] { "a", "b" },
+                    item => item,
+                    queueState => savedSnapshots.Add((queueState.CurrentItemKey, string.Join(",", queueState.PendingItemKeys))),
+                    (item, index, totalCount, operationContext) => item == "a"
+                        ? throw new InvalidOperationException("boom")
+                        : Task.CompletedTask,
+                    context);
+            });
+
+            Assert.That(state.CurrentItemKey, Is.EqualTo("a"));
+            Assert.That(state.PendingItemKeys, Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(savedSnapshots, Is.EqualTo(new[]
+            {
+                ("a", "a,b")
+            }));
+        }
+
+        private static EditorPersistentOperationContext CreateContext()
+        {
+            return new EditorPersistentOperationContext(
+                CancellationToken.None,
+                (_, _) => { },
+                action => action?.Invoke());
+        }
+    }
+}
