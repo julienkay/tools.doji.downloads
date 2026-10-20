@@ -1,2 +1,8 @@
 - name: Download Utils
   href: ../index.md
+- name: Getting started
+  href: getting-started.md
+- name: Downloading files
+  href: downloading-files.md
+- name: Persistent Editor operations
+  href: editor-operations.md

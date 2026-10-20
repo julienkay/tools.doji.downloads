@@ -10,8 +10,9 @@ namespace Doji.Downloads
     public static class JsonStateStore
     {
         /// <summary>
-        /// Reads previously saved state. Invalid or missing files return null so callers can start fresh.
+        /// Reads saved state. A missing file or invalid JSON returns null, so the caller starts fresh.
         /// </summary>
+        /// <exception cref="IOException">The file exists but cannot be read, for example because another process holds it.</exception>
         public static TState Load<TState>(string path)
             where TState : class
         {
@@ -24,7 +25,7 @@ namespace Doji.Downloads
             {
                 return JsonConvert.DeserializeObject<TState>(File.ReadAllText(path));
             }
-            catch
+            catch (JsonException)
             {
                 return null;
             }
@@ -47,10 +48,12 @@ namespace Doji.Downloads
 
             if (File.Exists(path))
             {
-                File.Delete(path);
+                File.Replace(temporaryPath, path, null);
             }
-
-            File.Move(temporaryPath, path);
+            else
+            {
+                File.Move(temporaryPath, path);
+            }
         }
 
         /// <summary>

@@ -4,7 +4,7 @@ using System.Threading;
 namespace Doji.Downloads.Editor
 {
     /// <summary>
-    /// Exposes cancellation, progress, and main-thread callback hooks to editor-persistent operations.
+    /// What a running <see cref="EditorPersistentOperationRunner"/> operation gets: cancellation, progress and main-thread dispatch.
     /// </summary>
     public sealed class EditorPersistentOperationContext
     {
@@ -21,10 +21,14 @@ namespace Doji.Downloads.Editor
             _queueOnMainThread = queueOnMainThread;
         }
 
+        /// <summary>
+        /// Cancelled by <see cref="EditorPersistentOperationRunner.Cancel"/> or the Background Tasks cancel button.
+        /// Let the resulting <see cref="System.OperationCanceledException"/> through, so the runner ends the operation.
+        /// </summary>
         public CancellationToken CancellationToken { get; }
 
         /// <summary>
-        /// Updates the shared editor progress entry for the active operation.
+        /// Updates the operation's Background Tasks entry.
         /// </summary>
         public void ReportProgress(float progress, string description)
         {
@@ -32,7 +36,7 @@ namespace Doji.Downloads.Editor
         }
 
         /// <summary>
-        /// Schedules work back onto the main thread after background continuation completes.
+        /// Runs <paramref name="action"/> on the main thread on a later Editor update.
         /// </summary>
         public void QueueOnMainThread(Action action)
         {

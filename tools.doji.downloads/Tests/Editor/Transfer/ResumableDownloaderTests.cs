@@ -84,6 +84,27 @@ namespace Doji.Downloads.Editor.Tests
         }
 
         [Test]
+        public async Task DownloadFileAsync_ReportsProgressFewerTimesThanChunks()
+        {
+            var largeFile = new byte[8 * 1024 * 1024];
+            new Random(1).NextBytes(largeFile);
+            using var server = TestServer.Start(largeFile);
+            var reports = new List<DownloadProgress>();
+
+            await new ResumableDownloader().DownloadFileAsync(
+                server.Url,
+                _targetPath,
+                largeFile.Length,
+                new SyncProgress(reports.Add),
+                CancellationToken.None);
+
+            Assert.That(File.ReadAllBytes(_targetPath), Is.EqualTo(largeFile));
+            Assert.That(reports.Count, Is.LessThan(largeFile.Length / (64 * 1024)));
+            Assert.That(reports[reports.Count - 1].DownloadedBytes, Is.EqualTo(largeFile.Length));
+            Assert.That(reports[reports.Count - 1].TotalBytes, Is.EqualTo(largeFile.Length));
+        }
+
+        [Test]
         public async Task DownloadFileAsync_ReplacesPartialInOneRequest_WhenServerIgnoresRange()
         {
             using var server = TestServer.Start(FileBytes);
@@ -181,17 +202,11 @@ namespace Doji.Downloads.Editor.Tests
             using var server = TestServer.Start(FileBytes);
             server.HoldAfterBytes = 4;
             File.WriteAllText(_targetPath, "old");
-            using var cancellation = new CancellationTokenSource();
-            var progress = new SyncProgress(value =>
-            {
-                if (value.DownloadedBytes >= 4)
-                {
-                    cancellation.Cancel();
-                }
-            });
+            // The server sends 4 bytes and then holds the response open far longer than this.
+            using var cancellation = new CancellationTokenSource(1000);
 
             await CatchAsync<OperationCanceledException>(() =>
-                new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, progress, cancellation.Token));
+                new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, null, cancellation.Token));
 
             Assert.That(File.ReadAllText(_targetPath), Is.EqualTo("old"));
             Assert.That(new FileInfo(PartialPath).Length, Is.EqualTo(4));

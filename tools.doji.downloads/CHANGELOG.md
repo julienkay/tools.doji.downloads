@@ -13,4 +13,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - `ResumableDownloader`: resumable file downloads with `Range` and `If-Range`, size checks before the target is replaced, and one restart from zero when a partial file cannot continue. Runtime-safe.
 - `UnityWebRequestExtensions.SendAsync` and `WebRequestException`, which names the URL and the cause.
 - `FileLock.TryAcquire` and `FileLock.AcquireAsync`, which waits without blocking the main thread.
-- `EditorPersistentOperationRunner` and `EditorPersistentItemQueueExecutor`: persistent Editor operations that resume after a domain reload, with Background Tasks progress and cancellation.
+- `EditorPersistentOperationRunner` and `EditorPersistentItemQueueExecutor`: persistent Editor operations that resume after a domain reload, with Background Tasks progress and cancellation. The runner creates and removes its Background Tasks entry; the executor skips items that are no longer pending.
+- `JsonStateStore`: atomic state files; unreadable files throw instead of loading as empty state.
+- User manual: getting started, downloading files, and persistent Editor operations.

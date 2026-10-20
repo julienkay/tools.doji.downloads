@@ -5,13 +5,21 @@ using System.Threading.Tasks;
 namespace Doji.Downloads.Editor
 {
     /// <summary>
-    /// Executes sequential item queues over persisted stable keys while keeping save/resume semantics outside item logic.
+    /// Processes a queue of items one by one and saves progress between items, so item logic never handles save and resume.
     /// </summary>
     public static class EditorPersistentItemQueueExecutor
     {
         /// <summary>
-        /// Processes queued items in order, persisting current item and remaining keys before and after each successful step.
+        /// Processes the items whose keys are still pending in <paramref name="state"/>, in the order of <paramref name="items"/>.
         /// </summary>
+        /// <remarks>
+        /// Pass every item: items whose keys are not pending are skipped, so a resumed queue continues where it stopped.
+        /// The state is saved before each item (with <see cref="PersistentItemQueueState.CurrentItemKey"/> set) and after it
+        /// (with the key removed). Cancellation is checked before each item.
+        /// </remarks>
+        /// <param name="getItemKey">Returns the stable key that identifies an item in the saved state.</param>
+        /// <param name="saveState">Saves the state, usually <see cref="EditorPersistentOperationRunner.SaveState"/>.</param>
+        /// <param name="processItemAsync">Processes one item; receives the item, its index and the number of items to process.</param>
         public static async Task ExecuteAsync<TItem>(
             PersistentItemQueueState state,
             IReadOnlyList<TItem> items,
@@ -50,15 +58,25 @@ namespace Doji.Downloads.Editor
                 throw new ArgumentNullException(nameof(context));
             }
 
-            for (var index = 0; index < items.Count; index++)
+            var pendingKeys = new HashSet<string>(state.PendingItemKeys, StringComparer.Ordinal);
+            var queue = new List<(TItem Item, string Key)>();
+            foreach (var item in items)
+            {
+                var key = getItemKey(item);
+                if (pendingKeys.Remove(key))
+                {
+                    queue.Add((item, key));
+                }
+            }
+
+            for (var index = 0; index < queue.Count; index++)
             {
                 context.CancellationToken.ThrowIfCancellationRequested();
-                var item = items[index];
-                var itemKey = getItemKey(item);
+                var (item, itemKey) = queue[index];
                 state.CurrentItemKey = itemKey;
                 saveState(state);
 
-                await processItemAsync(item, index, items.Count, context);
+                await processItemAsync(item, index, queue.Count, context);
 
                 state.PendingItemKeys.Remove(itemKey);
                 state.CurrentItemKey = null;

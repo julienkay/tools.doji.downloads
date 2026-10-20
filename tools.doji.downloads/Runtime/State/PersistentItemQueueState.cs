@@ -10,7 +10,14 @@ namespace Doji.Downloads
     [Serializable]
     public sealed class PersistentItemQueueState
     {
+        /// <summary>
+        /// The key of the item in progress, or null between items.
+        /// </summary>
         public string CurrentItemKey { get; set; }
+
+        /// <summary>
+        /// The keys of the items that are not done yet, in order. Includes the current item.
+        /// </summary>
         public List<string> PendingItemKeys { get; set; } = new();
 
         /// <summary>

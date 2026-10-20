@@ -1,13 +1,12 @@
 # Download Utils
 
-A download utility for asynchronous, resumable background downloads 
+Reliable downloads of large files for Unity. A download continues after a network failure, a domain reload or an Editor restart, and never leaves a broken file that looks complete. See [VISION.md](VISION.md).
 
 ## Installation
 
-Add the package via UPM using:
-
-`tools.doji.downloads`
+Add the OpenUPM scoped registry for `tools.doji`, then add `tools.doji.downloads`. See [Getting started](docs/manual/getting-started.md#installation).
 
 ## Documentation
 
-Document the public workflow, setup steps, and examples here.
+- [User documentation](docs/index.md)
+- [Package README](tools.doji.downloads/README.md)

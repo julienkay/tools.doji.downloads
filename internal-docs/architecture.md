@@ -44,23 +44,30 @@ not match byte ranges. `UnityWebRequestExtensions.SendAsync` awaits
 request on the thread that sent it and throws `OperationCanceledException`;
 the partial file stays.
 
+Progress is reported when the response is accepted, at most every 100 ms
+while data arrives, and once when the body is complete.
+
 ## State
 
 `PersistentItemQueueState` holds the current item key and the pending item
-keys, without duplicates. `JsonStateStore` saves it as JSON through a
-temporary file, so an interrupted write keeps the old state. A missing or
-invalid file loads as `null`, so the caller starts fresh.
+keys, without duplicates. `JsonStateStore` writes JSON to a temporary file and
+swaps it in with `File.Replace`, so an interrupted write keeps the old state.
+A missing file or invalid JSON loads as `null`, so the caller starts fresh.
+A file that cannot be read (for example, held by another process) throws, so
+good state is never overwritten by a fresh one.
 
 `EditorPersistentItemQueueExecutor` processes items in order and saves the
-state before and after each item. It processes every item it gets: the
-caller passes only the items that are still pending. It checks cancellation
-before each item. Item logic gets an index, a count and an
+state before and after each item. It skips items whose keys are no longer
+pending, so callers pass the full item list on every resume. It checks
+cancellation before each item. Item logic gets an index, a count and an
 `EditorPersistentOperationContext`; it never saves or resumes state itself.
 
 ## Operations
 
 `EditorPersistentOperationRunner` owns one state file and one Unity
-`Progress` item. `StartOrResume` loads the saved state or creates a new one,
+`Progress` item. It creates the item on start, ignores progress reports that
+arrive after the operation ended, and removes the item when the operation
+ends in any way. `StartOrResume` loads the saved state or creates a new one,
 then runs the operation. When the operation returns `true`, the runner
 deletes the state file; `false` keeps it for a later resume. After a domain
 reload or an Editor restart, the caller checks `HasPersistedState` and calls
@@ -90,6 +97,5 @@ use the network.
 
 ## Known limits
 
-- `Editor/AssemblyInfo.cs` and `Runtime/AssemblyInfo.cs` grant
-  `InternalsVisibleTo` to `Doji.ModelHub.Editor.Tests`, left over from
-  extraction.
+- The downloader does not check content hashes; callers that have one check
+  the target after the download.

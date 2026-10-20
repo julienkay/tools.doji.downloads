@@ -70,5 +70,31 @@ namespace Doji.Downloads.Editor.Tests
 
             Assert.That(JsonStateStore.Load<PersistentItemQueueState>(path), Is.Null);
         }
+
+        [Test]
+        public void Save_ReplacesExistingStateWithoutLeavingTemporaryFile()
+        {
+            var path = Path.Combine(_rootDirectory, "sync-state.json");
+            JsonStateStore.Save(path, PersistentItemQueueState.Create(new[] { "a", "b" }));
+
+            JsonStateStore.Save(path, PersistentItemQueueState.Create(new[] { "b" }));
+
+            Assert.That(JsonStateStore.Load<PersistentItemQueueState>(path).PendingItemKeys, Is.EqualTo(new[] { "b" }));
+            Assert.That(File.Exists(path + ".tmp"), Is.False);
+        }
+
+        [Test]
+        public void Load_ThrowsWhenFileIsHeldByAnotherWriter()
+        {
+            var path = Path.Combine(_rootDirectory, "sync-state.json");
+            JsonStateStore.Save(path, PersistentItemQueueState.Create(new[] { "a" }));
+
+            using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                Assert.Throws<IOException>(() => JsonStateStore.Load<PersistentItemQueueState>(path));
+            }
+
+            Assert.That(JsonStateStore.Load<PersistentItemQueueState>(path).PendingItemKeys, Is.EqualTo(new[] { "a" }));
+        }
     }
 }

@@ -10,5 +10,4 @@ using System.Runtime.CompilerServices;
 [assembly: AssemblyVersion("1.0.0.0")]
 [assembly: AssemblyFileVersion("1.0.0.0")]
 [assembly: AssemblyInformationalVersion("1.0.0")]
-[assembly: InternalsVisibleTo("Doji.ModelHub.Editor.Tests")]
 [assembly: InternalsVisibleTo("Doji.Downloads.Editor.Tests")]

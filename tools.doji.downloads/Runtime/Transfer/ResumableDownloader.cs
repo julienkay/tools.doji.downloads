@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Threading;
@@ -35,7 +36,10 @@ namespace Doji.Downloads
         /// The size the caller expects, or null. A different size reported by the server fails the download before
         /// bytes are written.
         /// </param>
-        /// <param name="progress">Receives bytes on disk and the best-known total. Reported on the calling thread.</param>
+        /// <param name="progress">
+        /// Receives bytes on disk and the best-known total, at most every 100 ms plus once at the start and the end.
+        /// Reported on the calling thread.
+        /// </param>
         /// <param name="cancellationToken">Cancels the request. The partial file stays for a later resume.</param>
         /// <exception cref="WebRequestException">The server or the connection failed. The partial file stays.</exception>
         /// <exception cref="IOException">The download is incomplete or has the wrong size. The target is not changed.</exception>
@@ -243,6 +247,8 @@ namespace Doji.Downloads
         /// </summary>
         private sealed class PartialFileHandler : DownloadHandlerScript
         {
+            private const long ProgressIntervalMilliseconds = 100;
+            private readonly Stopwatch _sinceProgress = new();
             private readonly string _partialPath;
             private readonly string _infoPath;
             private readonly PartialDownloadInfo _info;
@@ -345,7 +351,7 @@ namespace Doji.Downloads
                     });
                 }
 
-                _progress?.Report(new DownloadProgress(_downloadedBytes, _totalBytes));
+                ReportProgress();
                 return true;
             }
 
@@ -374,13 +380,29 @@ namespace Doji.Downloads
 
                 _fileStream.Write(data, 0, dataLength);
                 _downloadedBytes += dataLength;
-                _progress?.Report(new DownloadProgress(_downloadedBytes, _totalBytes));
+
+                // Large files arrive in tens of thousands of chunks; one report per chunk floods the Editor.
+                if (_sinceProgress.ElapsedMilliseconds >= ProgressIntervalMilliseconds)
+                {
+                    ReportProgress();
+                }
+
                 return true;
             }
 
             protected override void CompleteContent()
             {
                 _fileStream?.Flush();
+                if (_fileStream != null)
+                {
+                    ReportProgress();
+                }
+            }
+
+            private void ReportProgress()
+            {
+                _progress?.Report(new DownloadProgress(_downloadedBytes, _totalBytes));
+                _sinceProgress.Restart();
             }
 
             private bool CheckExpectedSize()

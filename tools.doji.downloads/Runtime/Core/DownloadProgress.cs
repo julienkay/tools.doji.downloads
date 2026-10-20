@@ -14,7 +14,14 @@ namespace Doji.Downloads
             TotalBytes = totalBytes;
         }
 
+        /// <summary>
+        /// Bytes on disk, including bytes from an earlier attempt that this download resumed.
+        /// </summary>
         public long DownloadedBytes { get; }
+
+        /// <summary>
+        /// The full size of the file, or null when the server did not say.
+        /// </summary>
         public long? TotalBytes { get; }
     }
 }

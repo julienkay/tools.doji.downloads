@@ -72,6 +72,28 @@ namespace Doji.Downloads.Editor.Tests
         }
 
         [Test]
+        public async Task ExecuteAsync_SkipsItemsThatAreNoLongerPending()
+        {
+            var state = PersistentItemQueueState.Create(new[] { "b", "c" });
+            var processed = new List<string>();
+
+            await EditorPersistentItemQueueExecutor.ExecuteAsync(
+                state,
+                new[] { "a", "b", "c" },
+                item => item,
+                _ => { },
+                (item, index, totalCount, operationContext) =>
+                {
+                    processed.Add($"{index}/{totalCount}:{item}");
+                    return Task.CompletedTask;
+                },
+                CreateContext());
+
+            Assert.That(processed, Is.EqualTo(new[] { "0/2:b", "1/2:c" }));
+            Assert.That(state.PendingItemKeys, Is.Empty);
+        }
+
+        [Test]
         public void ExecuteAsync_StopsBeforeNextItem_WhenCanceled()
         {
             var state = PersistentItemQueueState.Create(new[] { "a", "b" });

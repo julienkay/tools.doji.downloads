@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using UnityEditor;
 
 namespace Doji.Downloads.Editor.Tests
 {
@@ -61,6 +62,39 @@ namespace Doji.Downloads.Editor.Tests
             Assert.That(loadedState.PendingItemKeys, Is.EqualTo(new[] { "pkg:model-a" }));
             await WaitUntilAsync(() => !File.Exists(statePath));
             Assert.That(runner.HasPersistedState(), Is.False);
+            await WaitUntilAsync(() => !runner.IsRunning);
+            Assert.That(runner.ProgressId, Is.EqualTo(-1));
+        }
+
+        [Test]
+        public async Task StartOrResume_ShowsProgressWhileRunning()
+        {
+            var statePath = Path.Combine(_rootDirectory, "sync-state.json");
+            var runner = new EditorPersistentOperationRunner("Progress Sync", "Running", statePath);
+            var reported = new TaskCompletionSource<bool>();
+            var release = new TaskCompletionSource<bool>();
+
+            runner.StartOrResume(
+                () => PersistentItemQueueState.Create(new[] { "pkg:model-a" }),
+                async (state, context) =>
+                {
+                    context.ReportProgress(0.5f, "Halfway");
+                    reported.TrySetResult(true);
+                    await release.Task;
+                    return true;
+                },
+                exception => reported.TrySetException(exception));
+
+            await reported.Task;
+            var progressId = runner.ProgressId;
+            Assert.That(Progress.Exists(progressId), Is.True);
+
+            release.TrySetResult(true);
+            await WaitUntilAsync(() => !runner.IsRunning);
+            Assert.That(runner.ProgressId, Is.EqualTo(-1));
+
+            // Unity applies Progress.Remove on a later Editor update.
+            await WaitUntilAsync(() => !Progress.Exists(progressId));
         }
 
         [Test]
