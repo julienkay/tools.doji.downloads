@@ -6,7 +6,7 @@ A download utility for asynchronous, resumable background downloads
 
 Add the package via UPM using:
 
-`com.doji.downloads`
+`tools.doji.downloads`
 
 ## Documentation
 

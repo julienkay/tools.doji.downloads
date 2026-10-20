@@ -1,14 +1,15 @@
 {
-  "name": "com.doji.downloads",
+  "name": "tools.doji.downloads",
   "version": "1.0.0",
   "displayName": "Download Utils",
   "description": "A download utility for asynchronous, resumable background downloads",
+  "unity": "6000.3",
   "author": {
     "name": "Doji Technologies",
-    "url": "https://docs.doji-tech.com/com.doji.downloads",
+    "url": "https://docs.doji-tech.com/tools.doji.downloads",
     "email": "support@doji-tech.com"
   },
-  "documentationUrl": "https://docs.doji-tech.com/com.doji.downloads",
+  "documentationUrl": "https://docs.doji-tech.com/tools.doji.downloads",
   "dependencies": {
     "com.unity.nuget.newtonsoft-json": "3.2.2"
   }

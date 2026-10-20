@@ -6,7 +6,7 @@
           "files": [
             "**/*.cs"
           ],
-          "src": "../com.doji.downloads"
+          "src": "../tools.doji.downloads"
         }
       ],
       "dest": "api",
@@ -56,11 +56,11 @@
     "globalMetadata": {
       "_appFaviconPath": "images/favicon.ico",
       "_appLogoPath": "images/logo.png",
-      "_appLogoUrl": "https://docs.doji-tech.com/com.doji.downloads",
+      "_appLogoUrl": "https://docs.doji-tech.com/tools.doji.downloads",
       "_disableContribution": true,
       "pdf": true,
       "pdfTocPage": true,
-      "pdfFileName": "com.doji.downloads.pdf"
+      "pdfFileName": "tools.doji.downloads.pdf"
     },
     "fileMetadataFiles": [],
     "template": [

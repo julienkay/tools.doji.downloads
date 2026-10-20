@@ -2,11 +2,11 @@
 
 ## Project Intent
 
-This repository contains the Unity package `com.doji.downloads` and its companion project `Download Utils`.
+This repository contains the Unity package `tools.doji.downloads` and its companion project `Download Utils`.
 
 A download utility for asynchronous, resumable background downloads 
 
-Unity 6000.3 LTS. There is no compile step, CLI build command, or test runner to invoke. Do not attempt to build, compile, or run the project.
+The companion project uses Unity 6000.6. The package supports Unity 6000.3 LTS and later. There is no compile step, CLI build command, or test runner to invoke. Do not attempt to build, compile, or run the project.
 
 ## Package Direction
 
@@ -17,7 +17,7 @@ Unity 6000.3 LTS. There is no compile step, CLI build command, or test runner to
 Prefer these locations:
 
 - repository root: orient from the repository root for searches, docs, and cross-package work; from this companion Unity project working directory, the repository root is `../..`
-- `com.doji.downloads/`: local package under development
+- `tools.doji.downloads/`: local package under development
 - `docs/`: user-facing package documentation only; keep maintainer notes and internal architecture docs out of DocFX content
 - `.codex/current-work.md`: first-read session resume doc with active tasks, blockers, and next steps
 - `.codex/project-brief.md`: stable project intent, constraints, and repo context

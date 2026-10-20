@@ -1,7 +1,7 @@
 {
   "dependencies": {
-    "com.doji.downloads": {
-      "version": "file:../../../com.doji.downloads",
+    "tools.doji.downloads": {
+      "version": "file:../../../tools.doji.downloads",
       "depth": 0,
       "source": "local",
       "dependencies": {}
