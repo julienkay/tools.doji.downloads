@@ -52,6 +52,7 @@ namespace Doji.Downloads.Editor
 
             for (var index = 0; index < items.Count; index++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 var item = items[index];
                 var itemKey = getItemKey(item);
                 state.CurrentItemKey = itemKey;

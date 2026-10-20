@@ -23,8 +23,8 @@ Prefer these locations:
 
 - repository root: orient from the repository root for searches, docs, and cross-package work; from this companion Unity project working directory, the repository root is `../..`
 - `tools.doji.downloads/`: local package under development
-  - `Runtime`: state, locking and progress (`JsonStateStore`, `PersistentItemQueueState`, `FileLock`, `DownloadProgress`)
-  - `Editor`: persistent operations with Unity `Progress` UI (`Operations`) and the resumable downloader (`Transfer`)
+  - `Runtime`: resumable downloads (`Transfer`), state, locking and progress (`ResumableDownloader`, `JsonStateStore`, `PersistentItemQueueState`, `FileLock`, `DownloadProgress`)
+  - `Editor`: persistent operations with Unity `Progress` UI and cancellation (`Operations`)
   - `Tests/Editor`: EditMode tests, grouped like the package folders
 - `docs/`: user-facing package documentation only; keep maintainer notes and internal architecture docs out of DocFX content
 - `internal-docs/`: design notes for maintainers; `internal-docs/README.md` indexes them. Read

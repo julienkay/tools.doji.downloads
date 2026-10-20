@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 
@@ -81,6 +82,35 @@ namespace Doji.Downloads.Editor.Tests
             await completion.Task;
             await WaitUntilAsync(() => File.Exists(statePath));
             Assert.That(runner.HasPersistedState(), Is.True);
+        }
+
+        [Test]
+        public async Task Cancel_DeletesStateAndReportsCancellation()
+        {
+            var statePath = Path.Combine(_rootDirectory, "sync-state.json");
+            var runner = new EditorPersistentOperationRunner("Test Sync", "Running", statePath);
+            var started = new TaskCompletionSource<bool>();
+            var canceled = new TaskCompletionSource<bool>();
+
+            runner.StartOrResume(
+                () => PersistentItemQueueState.Create(new[] { "pkg:model-a" }),
+                async (state, context) =>
+                {
+                    started.TrySetResult(true);
+                    await Task.Delay(Timeout.Infinite, context.CancellationToken);
+                    return true;
+                },
+                exception => canceled.TrySetException(exception),
+                () => canceled.TrySetResult(true));
+
+            await started.Task;
+            Assert.That(runner.HasPersistedState(), Is.True);
+
+            runner.Cancel();
+
+            await canceled.Task;
+            Assert.That(runner.HasPersistedState(), Is.False);
+            await WaitUntilAsync(() => !runner.IsRunning);
         }
 
         private static async Task WaitUntilAsync(Func<bool> predicate)

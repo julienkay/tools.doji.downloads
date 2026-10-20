@@ -71,10 +71,38 @@ namespace Doji.Downloads.Editor.Tests
             }));
         }
 
-        private static EditorPersistentOperationContext CreateContext()
+        [Test]
+        public void ExecuteAsync_StopsBeforeNextItem_WhenCanceled()
+        {
+            var state = PersistentItemQueueState.Create(new[] { "a", "b" });
+            var processed = new List<string>();
+            using var cancellation = new CancellationTokenSource();
+            var context = CreateContext(cancellation.Token);
+
+            Assert.CatchAsync<OperationCanceledException>(async () =>
+            {
+                await EditorPersistentItemQueueExecutor.ExecuteAsync(
+                    state,
+                    new[] { "a", "b" },
+                    item => item,
+                    _ => { },
+                    (item, index, totalCount, operationContext) =>
+                    {
+                        processed.Add(item);
+                        cancellation.Cancel();
+                        return Task.CompletedTask;
+                    },
+                    context);
+            });
+
+            Assert.That(processed, Is.EqualTo(new[] { "a" }));
+            Assert.That(state.PendingItemKeys, Is.EqualTo(new[] { "b" }));
+        }
+
+        private static EditorPersistentOperationContext CreateContext(CancellationToken cancellationToken = default)
         {
             return new EditorPersistentOperationContext(
-                CancellationToken.None,
+                cancellationToken,
                 (_, _) => { },
                 action => action?.Invoke());
         }

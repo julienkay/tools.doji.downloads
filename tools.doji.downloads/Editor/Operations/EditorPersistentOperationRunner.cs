@@ -39,10 +39,15 @@ namespace Doji.Downloads.Editor
         /// Starts a new operation or resumes persisted one using the same execution callback.
         /// Returning true from `runAsync` deletes persisted state; false leaves it for retry/resume.
         /// </summary>
+        /// <param name="onCanceled">
+        /// Runs on the main thread after <see cref="Cancel"/> or the Background Tasks cancel button stopped the
+        /// operation. The persisted state is already deleted, so a cancelled operation does not resume.
+        /// </param>
         public void StartOrResume(
             Func<PersistentItemQueueState> createState,
             Func<PersistentItemQueueState, EditorPersistentOperationContext, Task<bool>> runAsync,
-            Action<Exception> onUnhandledException)
+            Action<Exception> onUnhandledException,
+            Action onCanceled = null)
         {
             if (IsRunning)
             {
@@ -56,7 +61,15 @@ namespace Doji.Downloads.Editor
                 SaveState(state);
             }
 
-            _ = RunAsync(state, runAsync, onUnhandledException);
+            _ = RunAsync(state, runAsync, onUnhandledException, onCanceled);
+        }
+
+        /// <summary>
+        /// Requests cancellation of the running operation through its <see cref="EditorPersistentOperationContext.CancellationToken"/>.
+        /// </summary>
+        public void Cancel()
+        {
+            _cancellationTokenSource?.Cancel();
         }
 
         /// <summary>
@@ -83,16 +96,18 @@ namespace Doji.Downloads.Editor
         private async Task RunAsync(
             PersistentItemQueueState state,
             Func<PersistentItemQueueState, EditorPersistentOperationContext, Task<bool>> runAsync,
-            Action<Exception> onUnhandledException)
+            Action<Exception> onUnhandledException,
+            Action onCanceled)
         {
             IsRunning = true;
             _cancellationTokenSource = new CancellationTokenSource();
+            var cancellationToken = _cancellationTokenSource.Token;
 
             try
             {
                 EnsureProgress();
                 var context = new EditorPersistentOperationContext(
-                    _cancellationTokenSource.Token,
+                    cancellationToken,
                     ReportProgress,
                     QueueOnMainThread);
                 var completed = await runAsync(state, context);
@@ -100,6 +115,15 @@ namespace Doji.Downloads.Editor
                 {
                     DeleteState();
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                DeleteState();
+                QueueOnMainThread(() =>
+                {
+                    RemoveProgressIfExists();
+                    onCanceled?.Invoke();
+                });
             }
             catch (Exception exception)
             {
@@ -122,6 +146,11 @@ namespace Doji.Downloads.Editor
             if (!Progress.Exists(_progressId))
             {
                 _progressId = Progress.Start(_operationName, _initialDescription);
+                Progress.RegisterCancelCallback(_progressId, () =>
+                {
+                    Cancel();
+                    return true;
+                });
             }
         }
 
