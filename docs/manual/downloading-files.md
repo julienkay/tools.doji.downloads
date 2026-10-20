@@ -9,10 +9,11 @@ The downloader writes to `<target>.downloading`. When that file already exists,
 it asks the server only for the missing bytes, with an HTTP `Range` request.
 
 The downloader resumes only when it can prove the bytes on disk belong to the
-same file. When a download starts, it saves the server's `ETag` or
-`Last-Modified` value and the file size next to the partial file. A resume sends
-that value back (`If-Range`), so the server returns the whole file when it has
-changed. The downloader then starts over in the same request.
+same file. When a download starts, it saves the URL, the server's `ETag` or
+`Last-Modified` value and the file size next to the partial file. A resume needs
+the same URL and sends that value back (`If-Range`), so the server returns the
+whole file when it has changed. The downloader then starts over in the same
+request.
 
 It also starts over, at most once, when:
 
@@ -21,13 +22,18 @@ It also starts over, at most once, when:
   is longer than the remote file
 - the server returns another range or another total size than expected
 - a partial file has no saved server info, for example from another tool
+- a partial file came from another URL
+- the server gave neither a strong `ETag` nor `Last-Modified`, so a changed
+  file of the same size could not be detected
 
-A partial file that already has the full size is moved into place without a
-request.
+A partial file from the same URL that already has the full size is moved into
+place without a request.
 
 > [!NOTE]
-> Servers that support neither `Range` nor `ETag`/`Last-Modified` still work,
-> but every attempt downloads the whole file.
+> Servers without `Range` support, or without a strong `ETag` or
+> `Last-Modified`, still work, but an interrupted download starts over.
+> Keep the URL stable between calls: a different URL for the same target, such
+> as a signed URL that changes per call, also starts over.
 
 ## The target is replaced only when complete
 
@@ -38,7 +44,7 @@ against `expectedSizeInBytes`:
 | Result | Target | Partial file |
 |---|---|---|
 | Complete | Replaced | Removed |
-| Too short, for example a dropped connection | Unchanged | Kept, the next call resumes |
+| Too short, for example a dropped connection | Unchanged | Kept, the next call resumes if the server gave a validator |
 | Too long, or the server reports a different size than `expectedSizeInBytes` | Unchanged | Deleted |
 
 Pass `expectedSizeInBytes` when you know the size: a wrong size then fails

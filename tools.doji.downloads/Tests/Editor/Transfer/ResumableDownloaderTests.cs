@@ -109,7 +109,7 @@ namespace Doji.Downloads.Editor.Tests
         {
             using var server = TestServer.Start(FileBytes);
             server.RespectRange = false;
-            WritePartial("abc", new PartialDownloadInfo { ETag = "\"v1\"", TotalBytes = FileBytes.Length });
+            WritePartial(server.Url, "abc", new PartialDownloadInfo { ETag = "\"v1\"", TotalBytes = FileBytes.Length });
 
             await new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, null, CancellationToken.None);
 
@@ -122,7 +122,7 @@ namespace Doji.Downloads.Editor.Tests
         {
             using var server = TestServer.Start(FileBytes);
             server.ETag = "\"new\"";
-            WritePartial("XYZ", new PartialDownloadInfo { ETag = "\"old\"", TotalBytes = FileBytes.Length });
+            WritePartial(server.Url, "XYZ", new PartialDownloadInfo { ETag = "\"old\"", TotalBytes = FileBytes.Length });
 
             await new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, null, CancellationToken.None);
 
@@ -135,7 +135,7 @@ namespace Doji.Downloads.Editor.Tests
         {
             using var server = TestServer.Start(FileBytes);
             server.ETag = "\"v1\"";
-            WritePartial("abcdefghijkl", new PartialDownloadInfo { ETag = "\"v1\"" });
+            WritePartial(server.Url, "abcdefghijkl", new PartialDownloadInfo { ETag = "\"v1\"" });
 
             await new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, null, CancellationToken.None);
 
@@ -147,7 +147,7 @@ namespace Doji.Downloads.Editor.Tests
         public async Task DownloadFileAsync_FinishesCompletePartialWithoutRequest()
         {
             using var server = TestServer.Start(FileBytes);
-            WritePartial("abcdefghi", new PartialDownloadInfo { TotalBytes = FileBytes.Length });
+            WritePartial(server.Url, "abcdefghi", new PartialDownloadInfo { TotalBytes = FileBytes.Length });
 
             await new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, null, CancellationToken.None);
 
@@ -168,6 +168,84 @@ namespace Doji.Downloads.Editor.Tests
         }
 
         [Test]
+        public async Task DownloadFileAsync_RestartsIncompletePartialWithoutValidator()
+        {
+            // Same size, other content: without a validator the server cannot tell the file changed.
+            using var server = TestServer.Start(FileBytes);
+            WritePartial(server.Url, "XYZ", new PartialDownloadInfo { TotalBytes = FileBytes.Length });
+
+            await new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, null, CancellationToken.None);
+
+            Assert.That(File.ReadAllBytes(_targetPath), Is.EqualTo(FileBytes));
+            Assert.That(server.Requests, Is.EqualTo(new[] { (default(string), default(string)) }));
+        }
+
+        [Test]
+        public async Task DownloadFileAsync_RestartsPartialFromAnotherUrl()
+        {
+            using var server = TestServer.Start(FileBytes);
+            server.ETag = "\"v1\"";
+            WritePartial(server.Url, "XYZ", new PartialDownloadInfo
+            {
+                Url = "http://127.0.0.1:1/other",
+                ETag = "\"v1\"",
+                TotalBytes = FileBytes.Length,
+            });
+
+            await new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, null, CancellationToken.None);
+
+            Assert.That(File.ReadAllBytes(_targetPath), Is.EqualTo(FileBytes));
+            Assert.That(server.Requests, Is.EqualTo(new[] { (default(string), default(string)) }));
+        }
+
+        [Test]
+        public async Task DownloadFileAsync_DoesNotPromoteCompletePartialFromAnotherUrl()
+        {
+            using var server = TestServer.Start(FileBytes);
+            WritePartial(server.Url, "XYZXYZXYZ", new PartialDownloadInfo
+            {
+                Url = "http://127.0.0.1:1/other",
+                TotalBytes = FileBytes.Length,
+            });
+
+            await new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, null, null, CancellationToken.None);
+
+            Assert.That(File.ReadAllBytes(_targetPath), Is.EqualTo(FileBytes));
+            Assert.That(server.Requests, Has.Length.EqualTo(1));
+        }
+
+        [Test]
+        public async Task DownloadFileAsync_FailsOnUnsolicitedPartialResponse()
+        {
+            using var server = TestServer.Start(FileBytes);
+            server.PartialResponseBytes = 4;
+
+            var exception = await CatchAsync<IOException>(() =>
+                new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, null, null, CancellationToken.None));
+
+            Assert.That(exception.Message, Does.Contain("4 of 9"));
+            Assert.That(File.Exists(_targetPath), Is.False);
+        }
+
+        [Test]
+        public async Task DownloadFileAsync_AcceptsBareFileName()
+        {
+            using var server = TestServer.Start(FileBytes);
+            var previousDirectory = Directory.GetCurrentDirectory();
+            Directory.SetCurrentDirectory(_rootDirectory);
+            try
+            {
+                await new ResumableDownloader().DownloadFileAsync(server.Url, "file.bin", FileBytes.Length, null, CancellationToken.None);
+            }
+            finally
+            {
+                Directory.SetCurrentDirectory(previousDirectory);
+            }
+
+            Assert.That(File.ReadAllBytes(Path.Combine(_rootDirectory, "file.bin")), Is.EqualTo(FileBytes));
+        }
+
+        [Test]
         public async Task DownloadFileAsync_FailsWithoutWriting_WhenSizeDiffersFromExpected()
         {
             using var server = TestServer.Start(FileBytes);
@@ -185,7 +263,7 @@ namespace Doji.Downloads.Editor.Tests
         {
             using var server = TestServer.Start(FileBytes);
             server.StatusCode = 404;
-            WritePartial("abc", new PartialDownloadInfo { ETag = "\"v1\"", TotalBytes = FileBytes.Length });
+            WritePartial(server.Url, "abc", new PartialDownloadInfo { ETag = "\"v1\"", TotalBytes = FileBytes.Length });
 
             var exception = await CatchAsync<WebRequestException>(() =>
                 new ResumableDownloader().DownloadFileAsync(server.Url, _targetPath, FileBytes.Length, null, CancellationToken.None));
@@ -212,8 +290,9 @@ namespace Doji.Downloads.Editor.Tests
             Assert.That(new FileInfo(PartialPath).Length, Is.EqualTo(4));
         }
 
-        private void WritePartial(string content, PartialDownloadInfo info)
+        private void WritePartial(string url, string content, PartialDownloadInfo info)
         {
+            info.Url ??= url;
             File.WriteAllText(PartialPath, content);
             JsonStateStore.Save(InfoPath, info);
         }
@@ -273,6 +352,7 @@ namespace Doji.Downloads.Editor.Tests
             public int StatusCode { get; set; }
             public int? CutFirstResponseAfterBytes { get; set; }
             public int? HoldAfterBytes { get; set; }
+            public int? PartialResponseBytes { get; set; }
 
             public IReadOnlyList<(string Range, string IfRange)> Requests
             {
@@ -382,6 +462,18 @@ namespace Doji.Downloads.Editor.Tests
                 }
 
                 var length = _fileBytes.Length - start;
+                if (range == null && PartialResponseBytes.HasValue)
+                {
+                    // A misbehaving server: 206 for a request that asked for no range.
+                    length = PartialResponseBytes.Value;
+                    response.StatusCode = 206;
+                    response.ContentLength64 = length;
+                    response.AddHeader("Content-Range", $"bytes 0-{length - 1}/{_fileBytes.Length}");
+                    await response.OutputStream.WriteAsync(_fileBytes, 0, length);
+                    response.Close();
+                    return;
+                }
+
                 response.StatusCode = usesRange ? 206 : 200;
                 response.ContentLength64 = length;
                 if (usesRange)

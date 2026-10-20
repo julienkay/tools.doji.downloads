@@ -13,11 +13,12 @@ The companion project references the package with `file:` and lists it in
 
 ## Download
 
-`ResumableDownloader.DownloadFileAsync` writes bytes to
-`<target>.downloading` and what the server said about the file (strong ETag
-or `Last-Modified`, total size) to `<target>.downloading.json`. A partial
-file without that info is deleted, because its bytes may belong to another
-version of the file.
+`ResumableDownloader.DownloadFileAsync` resolves the target to a full path,
+writes bytes to `<target>.downloading`, and writes the source URL and what the
+server said about the file (strong ETag or `Last-Modified`, total size) to
+`<target>.downloading.json`. A partial file is deleted when that info is
+missing, when the URL differs, or when it is incomplete and has no validator,
+because its bytes may belong to another file or another version of it.
 
 A resume sends `Range: bytes=<size>-` and `If-Range: <validator>`. The
 handler decides from the response headers, before it writes a byte:
@@ -28,15 +29,21 @@ handler decides from the response headers, before it writes a byte:
   and restart from zero once.
 - `200`: the server ignored the range or the file changed. Truncate the
   partial file and write the body, in the same request.
+- `206` to a request without `Range`: write it as a new partial file and save
+  its total, so the final size check rejects a body that covers only part of
+  the file.
 - Not 2xx: write nothing. A `416` restarts from zero once; other errors throw
   `WebRequestException` and keep the partial file.
 - A total that differs from `expectedSizeInBytes` fails before any write and
   deletes the partial file.
 
+Exceptions inside Unity's handler callbacks are captured and rethrown after
+the request, instead of surfacing as Unity's generic "Data Processing Error".
+
 After the transfer, the partial size must equal the known total. A shorter
 file throws and stays for the next resume; a longer one is deleted. Only then
 does `File.Replace` (or `File.Move`) put it at the target. A partial file
-that already has the full size is moved without a request.
+from the same URL that already has the full size is moved without a request.
 
 Requests ask for `Accept-Encoding: identity`, because compressed bodies do
 not match byte ranges. `UnityWebRequestExtensions.SendAsync` awaits

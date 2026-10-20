@@ -36,13 +36,14 @@ namespace Doji.Downloads
         /// </summary>
         public static void Save<TState>(string path, TState state)
         {
-            var directory = Path.GetDirectoryName(path);
-            if (string.IsNullOrWhiteSpace(directory))
+            if (string.IsNullOrWhiteSpace(path))
             {
-                throw new InvalidOperationException("Missing persistent state directory.");
+                throw new ArgumentException("State path is required.", nameof(path));
             }
 
-            Directory.CreateDirectory(directory);
+            // A bare file name has no directory part; resolve it against the current directory.
+            path = Path.GetFullPath(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var temporaryPath = path + ".tmp";
             File.WriteAllText(temporaryPath, JsonConvert.SerializeObject(state, Formatting.Indented));
 

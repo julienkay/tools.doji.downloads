@@ -84,6 +84,24 @@ namespace Doji.Downloads.Editor.Tests
         }
 
         [Test]
+        public void Save_AcceptsBareFileName()
+        {
+            var previousDirectory = Directory.GetCurrentDirectory();
+            Directory.SetCurrentDirectory(_rootDirectory);
+            try
+            {
+                JsonStateStore.Save("state.json", PersistentItemQueueState.Create(new[] { "a" }));
+            }
+            finally
+            {
+                Directory.SetCurrentDirectory(previousDirectory);
+            }
+
+            var loaded = JsonStateStore.Load<PersistentItemQueueState>(Path.Combine(_rootDirectory, "state.json"));
+            Assert.That(loaded.PendingItemKeys, Is.EqualTo(new[] { "a" }));
+        }
+
+        [Test]
         public void Load_ThrowsWhenFileIsHeldByAnotherWriter()
         {
             var path = Path.Combine(_rootDirectory, "sync-state.json");

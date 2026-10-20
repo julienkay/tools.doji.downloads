@@ -3,15 +3,17 @@ using System;
 namespace Doji.Downloads
 {
     /// <summary>
-    /// What the server said about the file when a partial download started.
+    /// Where a partial download came from and what the server said about the file when it started.
     /// </summary>
     /// <remarks>
-    /// Saved next to the partial file. A resume sends the validator as <c>If-Range</c>, so a changed remote file
-    /// restarts from zero instead of appending bytes of another version. A partial file without this info is discarded.
+    /// Saved next to the partial file. A resume needs the same URL and sends the validator as <c>If-Range</c>, so a
+    /// changed remote file restarts from zero instead of appending bytes of another version. A partial file without
+    /// this info, from another URL, or incomplete without a validator is discarded.
     /// </remarks>
     [Serializable]
     internal sealed class PartialDownloadInfo
     {
+        public string Url { get; set; }
         public string ETag { get; set; }
         public string LastModified { get; set; }
         public long? TotalBytes { get; set; }

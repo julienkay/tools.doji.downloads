@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine.Networking;
@@ -13,9 +14,11 @@ namespace Doji.Downloads
     /// </summary>
     /// <remarks>
     /// Bytes go to <c>&lt;target&gt;.downloading</c>, and what the server said about the file goes to
-    /// <c>&lt;target&gt;.downloading.json</c>. A later call continues the partial file with an HTTP <c>Range</c>
-    /// request. The target is replaced only when the received size matches the size the server announced and the
-    /// expected size. Callers that can run the same download concurrently must hold a <see cref="FileLock"/>.
+    /// <c>&lt;target&gt;.downloading.json</c>. A later call for the same URL continues the partial file with an HTTP
+    /// <c>Range</c> request, but only when the server gave a validator (a strong <c>ETag</c> or <c>Last-Modified</c>);
+    /// otherwise it starts over. The target is replaced only when the received size matches the size the server
+    /// announced and the expected size. Callers that can run the same download concurrently must hold a
+    /// <see cref="FileLock"/>.
     /// </remarks>
     public sealed class ResumableDownloader
     {
@@ -27,6 +30,7 @@ namespace Doji.Downloads
             None,
             RestartFromZero,
             SizeMismatch,
+            Failed,
         }
 
         /// <summary>
@@ -60,11 +64,9 @@ namespace Doji.Downloads
                 throw new ArgumentException("Target path is required.", nameof(targetPath));
             }
 
-            var targetDirectory = Path.GetDirectoryName(targetPath);
-            if (!string.IsNullOrWhiteSpace(targetDirectory))
-            {
-                Directory.CreateDirectory(targetDirectory);
-            }
+            // A bare file name has no directory part; resolve it against the current directory.
+            targetPath = Path.GetFullPath(targetPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
 
             var partialPath = targetPath + PartialSuffix;
             var infoPath = targetPath + PartialInfoSuffix;
@@ -73,7 +75,7 @@ namespace Doji.Downloads
             for (var attempt = 0; ; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var info = LoadResumableInfo(partialPath, infoPath);
+                var info = LoadResumableInfo(url, partialPath, infoPath, expectedSizeInBytes);
                 var resumeSize = info != null ? new FileInfo(partialPath).Length : 0L;
 
                 if (info != null && IsComplete(resumeSize, info.TotalBytes, expectedSizeInBytes))
@@ -124,7 +126,7 @@ namespace Doji.Downloads
             IProgress<DownloadProgress> progress,
             CancellationToken cancellationToken)
         {
-            var handler = new PartialFileHandler(partialPath, infoPath, info, resumeSize, expectedSizeInBytes, progress);
+            var handler = new PartialFileHandler(url, partialPath, infoPath, info, resumeSize, expectedSizeInBytes, progress);
             var request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbGET, handler, null);
             handler.Request = request;
 
@@ -148,7 +150,8 @@ namespace Doji.Downloads
                 }
                 catch (WebRequestException) when (handler.Rejection != Rejection.None)
                 {
-                    // The handler aborted the transfer on purpose.
+                    // The handler aborted the transfer on purpose, or threw inside Unity's callback.
+                    handler.ThrowIfFailed();
                     return (handler.Rejection, handler.RejectionMessage);
                 }
                 catch (WebRequestException exception) when (exception.ResponseCode == 416 && resumeSize > 0)
@@ -158,6 +161,7 @@ namespace Doji.Downloads
 
                 // An empty body never reaches the handler's data callback.
                 handler.EnsureAccepted();
+                handler.ThrowIfFailed();
                 return (handler.Rejection, handler.RejectionMessage);
             }
             finally
@@ -168,9 +172,18 @@ namespace Doji.Downloads
         }
 
         /// <summary>
-        /// Returns the info for a partial file that can continue, or null after removing leftovers that cannot.
+        /// Returns the info for a partial file that can continue or is complete, or null after removing leftovers
+        /// that cannot.
         /// </summary>
-        private static PartialDownloadInfo LoadResumableInfo(string partialPath, string infoPath)
+        /// <remarks>
+        /// A partial file is kept only when it came from the same URL. An incomplete one also needs a validator:
+        /// without it, a changed remote file of the same size would be appended to bytes of the old version.
+        /// </remarks>
+        private static PartialDownloadInfo LoadResumableInfo(
+            string url,
+            string partialPath,
+            string infoPath,
+            long? expectedSizeInBytes)
         {
             if (!File.Exists(partialPath))
             {
@@ -179,10 +192,17 @@ namespace Doji.Downloads
             }
 
             var info = JsonStateStore.Load<PartialDownloadInfo>(infoPath);
-            if (info == null)
+            if (info == null || !string.Equals(info.Url, url, StringComparison.Ordinal))
             {
-                // Without the server's validator, the bytes may belong to another version of the file.
                 DiscardPartial(partialPath, infoPath);
+                return null;
+            }
+
+            var size = new FileInfo(partialPath).Length;
+            if (!IsComplete(size, info.TotalBytes, expectedSizeInBytes) && info.RangeValidator == null)
+            {
+                DiscardPartial(partialPath, infoPath);
+                return null;
             }
 
             return info;
@@ -249,6 +269,7 @@ namespace Doji.Downloads
         {
             private const long ProgressIntervalMilliseconds = 100;
             private readonly Stopwatch _sinceProgress = new();
+            private readonly string _url;
             private readonly string _partialPath;
             private readonly string _infoPath;
             private readonly PartialDownloadInfo _info;
@@ -259,8 +280,10 @@ namespace Doji.Downloads
             private bool _accepted;
             private long _downloadedBytes;
             private long? _totalBytes;
+            private Exception _failure;
 
             public PartialFileHandler(
+                string url,
                 string partialPath,
                 string infoPath,
                 PartialDownloadInfo info,
@@ -269,6 +292,7 @@ namespace Doji.Downloads
                 IProgress<DownloadProgress> progress)
                 : base(new byte[64 * 1024])
             {
+                _url = url;
                 _partialPath = partialPath;
                 _infoPath = infoPath;
                 _info = info;
@@ -295,6 +319,31 @@ namespace Doji.Downloads
                 {
                     return true;
                 }
+
+                try
+                {
+                    return Accept();
+                }
+                catch (Exception exception)
+                {
+                    _failure = exception;
+                    return Reject(Rejection.Failed, exception.Message);
+                }
+            }
+
+            /// <summary>
+            /// Rethrows an exception raised inside a Unity callback, which Unity would report only as a generic error.
+            /// </summary>
+            public void ThrowIfFailed()
+            {
+                if (_failure != null)
+                {
+                    ExceptionDispatchInfo.Capture(_failure).Throw();
+                }
+            }
+
+            private bool Accept()
+            {
 
                 var responseCode = Request.responseCode;
                 if (responseCode < 200 || responseCode >= 300)
@@ -323,12 +372,17 @@ namespace Doji.Downloads
                         return false;
                     }
 
-                    _fileStream = new FileStream(_partialPath, FileMode.Append, FileAccess.Write, FileShare.Read);
+                    // Without a resume there is no partial file to continue; an unsolicited 206 starts a new one.
+                    var mode = _resumeSize > 0 ? FileMode.Append : FileMode.Create;
+                    _fileStream = new FileStream(_partialPath, mode, FileAccess.Write, FileShare.Read);
                     _downloadedBytes = _resumeSize;
-                    if (_info != null && !_info.TotalBytes.HasValue && _totalBytes.HasValue)
+
+                    // Keep the announced total, so the final size check catches a response that covers only part of the file.
+                    var info = _info ?? CreateInfo();
+                    if (_info == null || info.TotalBytes != _totalBytes)
                     {
-                        _info.TotalBytes = _totalBytes;
-                        JsonStateStore.Save(_infoPath, _info);
+                        info.TotalBytes = _totalBytes;
+                        JsonStateStore.Save(_infoPath, info);
                     }
                 }
                 else
@@ -343,16 +397,23 @@ namespace Doji.Downloads
                     // Truncate before saving the new validator, so old bytes never pair with new info.
                     _fileStream = new FileStream(_partialPath, FileMode.Create, FileAccess.Write, FileShare.Read);
                     _downloadedBytes = 0;
-                    JsonStateStore.Save(_infoPath, new PartialDownloadInfo
-                    {
-                        ETag = Request.GetResponseHeader("ETag"),
-                        LastModified = Request.GetResponseHeader("Last-Modified"),
-                        TotalBytes = _totalBytes,
-                    });
+                    var info = CreateInfo();
+                    info.TotalBytes = _totalBytes;
+                    JsonStateStore.Save(_infoPath, info);
                 }
 
                 ReportProgress();
                 return true;
+            }
+
+            private PartialDownloadInfo CreateInfo()
+            {
+                return new PartialDownloadInfo
+                {
+                    Url = _url,
+                    ETag = Request.GetResponseHeader("ETag"),
+                    LastModified = Request.GetResponseHeader("Last-Modified"),
+                };
             }
 
             public void CloseFile()
@@ -378,7 +439,16 @@ namespace Doji.Downloads
                     return true;
                 }
 
-                _fileStream.Write(data, 0, dataLength);
+                try
+                {
+                    _fileStream.Write(data, 0, dataLength);
+                }
+                catch (Exception exception)
+                {
+                    _failure = exception;
+                    return Reject(Rejection.Failed, exception.Message);
+                }
+
                 _downloadedBytes += dataLength;
 
                 // Large files arrive in tens of thousands of chunks; one report per chunk floods the Editor.
