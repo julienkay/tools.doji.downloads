@@ -83,6 +83,33 @@ namespace Doji.Downloads.Editor.Tests
             Assert.That(lastProgress?.TotalBytes, Is.EqualTo(FileBytes.Length));
         }
 
+        /// <summary>
+        /// Resumes through a URL that redirects, like a Hugging Face <c>/resolve</c> URL that redirects to a signed CDN
+        /// URL: the resume state keeps the stable URL, and Range and If-Range reach the redirect target.
+        /// </summary>
+        [Test]
+        public async Task DownloadFileAsync_ResumesThroughRedirect()
+        {
+            using var server = TestServer.Start(FileBytes);
+            server.ETag = "\"v1\"";
+            server.CutFirstResponseAfterBytes = 4;
+            var stableUrl = server.Url + TestServer.RedirectPath;
+            var downloader = new ResumableDownloader();
+
+            await CatchAsync<WebRequestException>(() =>
+                downloader.DownloadFileAsync(stableUrl, _targetPath, FileBytes.Length, null, CancellationToken.None));
+
+            var partialLength = new FileInfo(PartialPath).Length;
+            Assert.That(partialLength, Is.InRange(1, FileBytes.Length - 1));
+            Assert.That(JsonStateStore.Load<PartialDownloadInfo>(InfoPath).Url, Is.EqualTo(stableUrl));
+
+            await downloader.DownloadFileAsync(stableUrl, _targetPath, FileBytes.Length, null, CancellationToken.None);
+
+            Assert.That(File.ReadAllBytes(_targetPath), Is.EqualTo(FileBytes));
+            Assert.That(server.RequestPaths, Is.EqualTo(new[] { "/" + TestServer.RedirectPath, "/", "/" + TestServer.RedirectPath, "/" }));
+            Assert.That(server.Requests[3], Is.EqualTo(($"bytes={partialLength}-", "\"v1\"")));
+        }
+
         [Test]
         public async Task DownloadFileAsync_ReportsProgressFewerTimesThanChunks()
         {
@@ -328,15 +355,20 @@ namespace Doji.Downloads.Editor.Tests
         }
 
         /// <summary>
-        /// Serves one file with optional Range, If-Range, error, cut and hold behavior.
+        /// Serves one file with optional Range, If-Range, error, cut and hold behavior. Requests to
+        /// <see cref="RedirectPath"/> answer 302 with the file URL.
         /// </summary>
         private sealed class TestServer : IDisposable
         {
+            public const string RedirectPath = "redirect";
+
             private readonly byte[] _fileBytes;
             private readonly HttpListener _listener;
             private readonly CancellationTokenSource _stop = new();
             private readonly List<(string Range, string IfRange)> _requests = new();
+            private readonly List<string> _requestPaths = new();
             private readonly Task _serverTask;
+            private int _fileResponseCount;
 
             private TestServer(HttpListener listener, string url, byte[] fileBytes)
             {
@@ -353,6 +385,17 @@ namespace Doji.Downloads.Editor.Tests
             public int? CutFirstResponseAfterBytes { get; set; }
             public int? HoldAfterBytes { get; set; }
             public int? PartialResponseBytes { get; set; }
+
+            public IReadOnlyList<string> RequestPaths
+            {
+                get
+                {
+                    lock (_requests)
+                    {
+                        return _requestPaths.ToArray();
+                    }
+                }
+            }
 
             public IReadOnlyList<(string Range, string IfRange)> Requests
             {
@@ -419,14 +462,22 @@ namespace Doji.Downloads.Editor.Tests
             {
                 var range = context.Request.Headers["Range"];
                 var ifRange = context.Request.Headers["If-Range"];
-                int requestIndex;
                 lock (_requests)
                 {
                     _requests.Add((range, ifRange));
-                    requestIndex = _requests.Count - 1;
+                    _requestPaths.Add(context.Request.Url.AbsolutePath);
                 }
 
                 var response = context.Response;
+                if (context.Request.Url.AbsolutePath == "/" + RedirectPath)
+                {
+                    response.StatusCode = 302;
+                    response.RedirectLocation = Url;
+                    response.Close();
+                    return;
+                }
+
+                var fileResponseIndex = Interlocked.Increment(ref _fileResponseCount) - 1;
                 if (StatusCode != 0)
                 {
                     response.StatusCode = StatusCode;
@@ -481,7 +532,7 @@ namespace Doji.Downloads.Editor.Tests
                     response.AddHeader("Content-Range", $"bytes {start}-{_fileBytes.Length - 1}/{_fileBytes.Length}");
                 }
 
-                var sendBytes = HoldAfterBytes ?? (requestIndex == 0 ? CutFirstResponseAfterBytes : null);
+                var sendBytes = HoldAfterBytes ?? (fileResponseIndex == 0 ? CutFirstResponseAfterBytes : null);
                 if (sendBytes.HasValue)
                 {
                     await response.OutputStream.WriteAsync(_fileBytes, start, sendBytes.Value);
