@@ -6,6 +6,9 @@
           "files": [
             "**/*.cs"
           ],
+          "exclude": [
+            "Tests/**"
+          ],
           "src": "../tools.doji.downloads"
         }
       ],
