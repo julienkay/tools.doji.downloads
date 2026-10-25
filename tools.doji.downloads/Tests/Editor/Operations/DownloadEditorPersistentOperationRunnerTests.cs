@@ -8,7 +8,7 @@ using UnityEditor;
 namespace Doji.Downloads.Editor.Tests
 {
     /// <summary>
-    /// Covers generic editor-side recovery runner behavior independent from HF Hub-specific sync logic.
+    /// Covers generic editor-side recovery runner behavior independent from AI Model Hub-specific sync logic.
     /// </summary>
     internal sealed class DownloadEditorPersistentOperationRunnerTests
     {

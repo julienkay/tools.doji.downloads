@@ -5,7 +5,7 @@ using NUnit.Framework;
 namespace Doji.Downloads.Editor.Tests
 {
     /// <summary>
-    /// Covers generic downloader durable-state helpers independent from HF Hub-specific sync behavior.
+    /// Covers generic downloader durable-state helpers independent from AI Model Hub-specific sync behavior.
     /// </summary>
     internal sealed class DownloadPersistentStateStoreTests
     {

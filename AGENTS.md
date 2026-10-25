@@ -11,7 +11,7 @@ Unity 6000.6 for development; the package supports 6000.3 LTS and later.
 ## Package Direction
 
 - Follow `VISION.md` for durable product direction, scope and the decision test.
-- Stay generic: no host-, format- or caller-specific code. `tools.doji.hf-hub` is the first user, not a dependency.
+- Stay generic: no host-, format- or caller-specific code. `tools.doji.model-hub` is the first user, not a dependency.
 - Keep `Runtime` free of `UnityEditor`; only Editor integration belongs in `Editor`.
 - Depend only on Unity modules and Newtonsoft JSON.
 - The package is in active development. Prefer the current design over backwards compatibility.

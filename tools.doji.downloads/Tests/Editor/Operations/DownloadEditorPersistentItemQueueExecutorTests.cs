@@ -7,7 +7,7 @@ using NUnit.Framework;
 namespace Doji.Downloads.Editor.Tests
 {
     /// <summary>
-    /// Covers generic sequential queue executor independent from HF Hub-specific model sync work.
+    /// Covers generic sequential queue executor independent from AI Model Hub-specific model sync work.
     /// </summary>
     internal sealed class DownloadEditorPersistentItemQueueExecutorTests
     {

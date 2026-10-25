@@ -7,7 +7,7 @@ after a network failure, a domain reload, or an Editor restart, and never
 leaves a broken file that looks complete.
 
 It is generic infrastructure. It knows nothing about HuggingFace, AI models,
-or Sentis. `tools.doji.hf-hub` is its first user.
+or Sentis. `tools.doji.model-hub` is its first user.
 
 ## Users
 
