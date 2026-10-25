@@ -47,8 +47,8 @@ against `expectedSizeInBytes`:
 | Too short, for example a dropped connection | Unchanged | Kept, the next call resumes if the server gave a validator |
 | Too long, or the server reports a different size than `expectedSizeInBytes` | Unchanged | Deleted |
 
-Pass `expectedSizeInBytes` when you know the size: a wrong size then fails
-before any byte is written.
+Pass `expectedSizeInBytes` when you know the size: a wrong size then fails as
+soon as the response headers arrive, without downloading the body.
 
 The downloader does not check content hashes. If you have one, check the
 target file after the download.
@@ -61,7 +61,8 @@ target file after the download.
 | `IOException` | The download is incomplete or has the wrong size. The message names the URL and both sizes. | Kept if too short, deleted otherwise |
 | `OperationCanceledException` | The `CancellationToken` was cancelled. | Kept |
 
-Error responses are never written to the partial file. To retry, call
+Error responses are never written to the partial file. Bytes received before a
+dropped connection or a cancellation are kept. To retry, call
 `DownloadFileAsync` again.
 
 ## Progress

@@ -20,25 +20,33 @@ server said about the file (strong ETag or `Last-Modified`, total size) to
 missing, when the URL differs, or when it is incomplete and has no validator,
 because its bytes may belong to another file or another version of it.
 
-A resume sends `Range: bytes=<size>-` and `If-Range: <validator>`. The
-handler decides from the response headers, before it writes a byte:
+A resume sends `Range: bytes=<size>-` and `If-Range: <validator>`. Each
+request writes its body to `<target>.downloading.segment` with Unity's
+`DownloadHandlerFile`, so bytes never pass through managed code and the
+download runs at disk and network speed. The downloader polls the request each
+frame. As soon as the status code is known, it decides from the headers:
 
 - `206` with a `Content-Range` that starts at the partial size and has the
-  same total: append.
-- `206` that starts elsewhere or has another total: discard the partial file
-  and restart from zero once.
-- `200`: the server ignored the range or the file changed. Truncate the
-  partial file and write the body, in the same request.
-- `206` to a request without `Range`: write it as a new partial file and save
-  its total, so the final size check rejects a body that covers only part of
-  the file.
-- Not 2xx: write nothing. A `416` restarts from zero once; other errors throw
-  `WebRequestException` and keep the partial file.
-- A total that differs from `expectedSizeInBytes` fails before any write and
-  deletes the partial file.
+  same total: append the segment to the partial file.
+- `206` that starts elsewhere or has another total: abort, discard the
+  partial file and restart from zero once.
+- `200`: the server ignored the range or the file changed. The segment
+  replaces the partial file.
+- `206` to a request without `Range`: the segment becomes a new partial file
+  with its announced total, so the final size check rejects a body that
+  covers only part of the file.
+- Not 2xx: drop the segment. A `416` restarts from zero once; other errors
+  throw `WebRequestException` and keep the partial file.
+- A total that differs from `expectedSizeInBytes`: abort, delete the partial
+  file and throw `IOException`.
 
-Exceptions inside Unity's handler callbacks are captured and rethrown after
-the request, instead of surfacing as Unity's generic "Data Processing Error".
+The segment joins the partial file after the request ends, also when the
+connection dropped or the call was cancelled after the response was
+accepted, so the next call resumes after the bytes received. When the
+segment replaces the partial file, the old info is deleted first and the new
+info is saved after the bytes, so old bytes never pair with a new validator.
+A leftover segment from an interrupted process is deleted before the next
+request.
 
 After the transfer, the partial size must equal the known total. A shorter
 file throws and stays for the next resume; a longer one is deleted. Only then
@@ -46,13 +54,13 @@ does `File.Replace` (or `File.Move`) put it at the target. A partial file
 from the same URL that already has the full size is moved without a request.
 
 Requests ask for `Accept-Encoding: identity`, because compressed bodies do
-not match byte ranges. `UnityWebRequestExtensions.SendAsync` awaits
-`AsyncOperation.completed` instead of polling. Cancellation aborts the
-request on the thread that sent it and throws `OperationCanceledException`;
-the partial file stays.
+not match byte ranges. Cancellation aborts the request and throws
+`OperationCanceledException`; the bytes received stay in the partial file.
+`UnityWebRequestExtensions.SendAsync` is for other requests: it awaits
+`AsyncOperation.completed` instead of polling.
 
 Progress is reported when the response is accepted, at most every 100 ms
-while data arrives, and once when the body is complete.
+while data arrives, and once when the request ends.
 
 ## State
 

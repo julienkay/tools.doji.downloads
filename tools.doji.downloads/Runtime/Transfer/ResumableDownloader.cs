@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine.Networking;
@@ -13,38 +12,41 @@ namespace Doji.Downloads
     /// Downloads one URL to a file and continues an interrupted download where it stopped.
     /// </summary>
     /// <remarks>
-    /// Bytes go to <c>&lt;target&gt;.downloading</c>, and what the server said about the file goes to
+    /// Bytes collect in <c>&lt;target&gt;.downloading</c>, and what the server said about the file goes to
     /// <c>&lt;target&gt;.downloading.json</c>. A later call for the same URL continues the partial file with an HTTP
     /// <c>Range</c> request, but only when the server gave a validator (a strong <c>ETag</c> or <c>Last-Modified</c>);
-    /// otherwise it starts over. The target is replaced only when the received size matches the size the server
-    /// announced and the expected size. Callers that can run the same download concurrently must hold a
+    /// otherwise it starts over. Each request writes its body to <c>&lt;target&gt;.downloading.segment</c> with Unity's
+    /// <see cref="DownloadHandlerFile"/>, so the bytes never pass through managed code. The segment joins the partial
+    /// file only after the response is checked. The target is replaced only when the received size matches the size
+    /// the server announced and the expected size. Callers that can run the same download concurrently must hold a
     /// <see cref="FileLock"/>.
     /// </remarks>
     public sealed class ResumableDownloader
     {
         internal const string PartialSuffix = ".downloading";
         internal const string PartialInfoSuffix = ".downloading.json";
+        internal const string SegmentSuffix = ".downloading.segment";
+        private const long ProgressIntervalMilliseconds = 100;
 
         private enum Rejection
         {
             None,
             RestartFromZero,
             SizeMismatch,
-            Failed,
         }
 
         /// <summary>
         /// Downloads <paramref name="url"/> to <paramref name="targetPath"/>, continuing a partial download if one exists.
         /// </summary>
         /// <param name="expectedSizeInBytes">
-        /// The size the caller expects, or null. A different size reported by the server fails the download before
-        /// bytes are written.
+        /// The size the caller expects, or null. A different size reported by the server fails the download as soon as
+        /// the response headers arrive, without changing the partial file.
         /// </param>
         /// <param name="progress">
         /// Receives bytes on disk and the best-known total, at most every 100 ms plus once at the start and the end.
         /// Reported on the calling thread.
         /// </param>
-        /// <param name="cancellationToken">Cancels the request. The partial file stays for a later resume.</param>
+        /// <param name="cancellationToken">Cancels the request. The bytes received so far stay for a later resume.</param>
         /// <exception cref="WebRequestException">The server or the connection failed. The partial file stays.</exception>
         /// <exception cref="IOException">The download is incomplete or has the wrong size. The target is not changed.</exception>
         public async Task DownloadFileAsync(
@@ -70,6 +72,7 @@ namespace Doji.Downloads
 
             var partialPath = targetPath + PartialSuffix;
             var infoPath = targetPath + PartialInfoSuffix;
+            var segmentPath = targetPath + SegmentSuffix;
 
             // A partial file that cannot continue (range rejected, remote file changed) restarts from zero once.
             for (var attempt = 0; ; attempt++)
@@ -85,12 +88,7 @@ namespace Doji.Downloads
                 }
 
                 var (rejection, message) = await DownloadAttemptAsync(
-                    url,
-                    partialPath,
-                    infoPath,
-                    info,
-                    resumeSize,
-                    expectedSizeInBytes,
+                    new Attempt(url, partialPath, infoPath, segmentPath, info, resumeSize, expectedSizeInBytes),
                     progress,
                     cancellationToken);
 
@@ -116,58 +114,121 @@ namespace Doji.Downloads
             DeleteIfExists(infoPath);
         }
 
+        /// <summary>
+        /// Sends one request into a fresh segment file, then decides from the response whether the segment continues
+        /// the partial file, replaces it, or is dropped. Bytes that arrived before a dropped connection or a
+        /// cancellation are kept when the response was accepted, so the next call resumes after them.
+        /// </summary>
         private static async Task<(Rejection Rejection, string Message)> DownloadAttemptAsync(
-            string url,
-            string partialPath,
-            string infoPath,
-            PartialDownloadInfo info,
-            long resumeSize,
-            long? expectedSizeInBytes,
+            Attempt attempt,
             IProgress<DownloadProgress> progress,
             CancellationToken cancellationToken)
         {
-            var handler = new PartialFileHandler(url, partialPath, infoPath, info, resumeSize, expectedSizeInBytes, progress);
-            var request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbGET, handler, null);
-            handler.Request = request;
+            DeleteIfExists(attempt.SegmentPath);
+            var request = new UnityWebRequest(
+                attempt.Url,
+                UnityWebRequest.kHttpVerbGET,
+                new DownloadHandlerFile(attempt.SegmentPath) { removeFileOnAbort = false },
+                null);
 
             // Compressed responses do not match byte ranges or Content-Length.
             request.SetRequestHeader("Accept-Encoding", "identity");
-            if (resumeSize > 0)
+            if (attempt.ResumeSize > 0)
             {
-                request.SetRequestHeader("Range", $"bytes={resumeSize}-");
-                var validator = info?.RangeValidator;
+                request.SetRequestHeader("Range", $"bytes={attempt.ResumeSize}-");
+                var validator = attempt.Info?.RangeValidator;
                 if (validator != null)
                 {
                     request.SetRequestHeader("If-Range", validator);
                 }
             }
 
+            Response response = null;
+            var canceled = false;
+            var sinceProgress = Stopwatch.StartNew();
             try
             {
-                try
+                var operation = request.SendWebRequest();
+                while (!operation.isDone)
                 {
-                    await request.SendAsync(cancellationToken);
-                }
-                catch (WebRequestException) when (handler.Rejection != Rejection.None)
-                {
-                    // The handler aborted the transfer on purpose, or threw inside Unity's callback.
-                    handler.ThrowIfFailed();
-                    return (handler.Rejection, handler.RejectionMessage);
-                }
-                catch (WebRequestException exception) when (exception.ResponseCode == 416 && resumeSize > 0)
-                {
-                    return (Rejection.RestartFromZero, exception.Message);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        canceled = true;
+                        request.Abort();
+                        break;
+                    }
+
+                    // Check the headers as soon as they arrive, so a wrong file is not downloaded to the end.
+                    if (response == null && request.responseCode != 0)
+                    {
+                        response = Response.Read(request, attempt);
+                        if (response.Rejection != Rejection.None)
+                        {
+                            request.Abort();
+                            break;
+                        }
+
+                        progress?.Report(response.Progress(request));
+                        sinceProgress.Restart();
+                    }
+                    else if (response != null && sinceProgress.ElapsedMilliseconds >= ProgressIntervalMilliseconds)
+                    {
+                        progress?.Report(response.Progress(request));
+                        sinceProgress.Restart();
+                    }
+
+                    await Task.Yield();
                 }
 
-                // An empty body never reaches the handler's data callback.
-                handler.EnsureAccepted();
-                handler.ThrowIfFailed();
-                return (handler.Rejection, handler.RejectionMessage);
+                // A fast response can finish before the loop saw its headers.
+                if (response == null && request.responseCode != 0)
+                {
+                    response = Response.Read(request, attempt);
+                }
+
+                var finalProgress = response?.Progress(request);
+                var result = request.result;
+                var error = request.error;
+                var responseCode = request.responseCode;
+                request.Dispose();
+                request = null;
+
+                if (response?.Rejection is Rejection.RestartFromZero or Rejection.SizeMismatch)
+                {
+                    return (response.Rejection, response.RejectionMessage);
+                }
+
+                if (response is { IsSuccess: true })
+                {
+                    // Bytes of an accepted response are valid, even when the connection dropped after them.
+                    response.MergeSegment(attempt);
+                    if (finalProgress.HasValue)
+                    {
+                        progress?.Report(finalProgress.Value);
+                    }
+                }
+
+                if (canceled)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+
+                if (responseCode == 416 && attempt.ResumeSize > 0)
+                {
+                    return (Rejection.RestartFromZero, $"the server rejected the range ({error}).");
+                }
+
+                if (result != UnityWebRequest.Result.Success)
+                {
+                    throw new WebRequestException(attempt.Url, responseCode, error);
+                }
+
+                return (Rejection.None, null);
             }
             finally
             {
-                request.Dispose();
-                handler.CloseFile();
+                request?.Dispose();
+                DeleteIfExists(attempt.SegmentPath);
             }
         }
 
@@ -221,6 +282,12 @@ namespace Doji.Downloads
             var totalBytes = JsonStateStore.Load<PartialDownloadInfo>(infoPath)?.TotalBytes ?? expectedSizeInBytes;
             if (!totalBytes.HasValue || size == totalBytes.Value)
             {
+                if (!File.Exists(partialPath))
+                {
+                    // An empty body never creates a file.
+                    File.WriteAllBytes(partialPath, Array.Empty<byte>());
+                }
+
                 return;
             }
 
@@ -261,271 +328,211 @@ namespace Doji.Downloads
             }
         }
 
-        /// <summary>
-        /// Decides from the response headers whether the body continues the partial file, replaces it, or is rejected,
-        /// and only then opens the file. Error bodies are never written.
-        /// </summary>
-        private sealed class PartialFileHandler : DownloadHandlerScript
+        private static long? ParseLong(string value)
         {
-            private const long ProgressIntervalMilliseconds = 100;
-            private readonly Stopwatch _sinceProgress = new();
-            private readonly string _url;
-            private readonly string _partialPath;
-            private readonly string _infoPath;
-            private readonly PartialDownloadInfo _info;
-            private readonly long _resumeSize;
-            private readonly long? _expectedSizeInBytes;
-            private readonly IProgress<DownloadProgress> _progress;
-            private FileStream _fileStream;
-            private bool _accepted;
-            private long _downloadedBytes;
-            private long? _totalBytes;
-            private Exception _failure;
+            return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+        }
 
-            public PartialFileHandler(
+        /// <summary>
+        /// Parses <c>bytes start-end/total</c>, where total may be <c>*</c>.
+        /// </summary>
+        private static bool TryParseContentRange(string value, out long start, out long? total)
+        {
+            start = 0;
+            total = null;
+            if (string.IsNullOrWhiteSpace(value) || !value.StartsWith("bytes ", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var range = value.Substring("bytes ".Length).Trim();
+            var slash = range.IndexOf('/');
+            var dash = range.IndexOf('-');
+            if (slash < 0 || dash < 0 || dash > slash)
+            {
+                return false;
+            }
+
+            if (!long.TryParse(range.Substring(0, dash), NumberStyles.Integer, CultureInfo.InvariantCulture, out start))
+            {
+                return false;
+            }
+
+            total = ParseLong(range.Substring(slash + 1));
+            return true;
+        }
+
+        /// <summary>
+        /// What one request is for: the URL, the files it writes, and the partial file it may continue.
+        /// </summary>
+        private sealed class Attempt
+        {
+            public Attempt(
                 string url,
                 string partialPath,
                 string infoPath,
+                string segmentPath,
                 PartialDownloadInfo info,
                 long resumeSize,
-                long? expectedSizeInBytes,
-                IProgress<DownloadProgress> progress)
-                : base(new byte[64 * 1024])
+                long? expectedSizeInBytes)
             {
-                _url = url;
-                _partialPath = partialPath;
-                _infoPath = infoPath;
-                _info = info;
-                _resumeSize = resumeSize;
-                _expectedSizeInBytes = expectedSizeInBytes;
-                _progress = progress;
+                Url = url;
+                PartialPath = partialPath;
+                InfoPath = infoPath;
+                SegmentPath = segmentPath;
+                Info = info;
+                ResumeSize = resumeSize;
+                ExpectedSizeInBytes = expectedSizeInBytes;
             }
 
-            public UnityWebRequest Request { private get; set; }
+            public string Url { get; }
+            public string PartialPath { get; }
+            public string InfoPath { get; }
+            public string SegmentPath { get; }
+            public PartialDownloadInfo Info { get; }
+            public long ResumeSize { get; }
+            public long? ExpectedSizeInBytes { get; }
+        }
+
+        /// <summary>
+        /// The decision on one response, made from its status and headers: continue the partial file, replace it, or
+        /// reject the response.
+        /// </summary>
+        private sealed class Response
+        {
+            private PartialDownloadInfo _info;
+
+            private Response()
+            {
+            }
+
+            public bool IsSuccess { get; private set; }
+
+            /// <summary>
+            /// Whether the body continues the partial file (a <c>206</c> at the partial size) instead of replacing it.
+            /// </summary>
+            public bool Appends { get; private set; }
+
+            public long StartOffset { get; private set; }
+            public long? TotalBytes { get; private set; }
             public Rejection Rejection { get; private set; }
             public string RejectionMessage { get; private set; }
 
-            /// <summary>
-            /// Accepts a 2xx response once its headers are known. Returns false when the transfer must stop.
-            /// </summary>
-            public bool EnsureAccepted()
+            public static Response Read(UnityWebRequest request, Attempt attempt)
             {
-                if (Rejection != Rejection.None)
-                {
-                    return false;
-                }
-
-                if (_accepted)
-                {
-                    return true;
-                }
-
-                try
-                {
-                    return Accept();
-                }
-                catch (Exception exception)
-                {
-                    _failure = exception;
-                    return Reject(Rejection.Failed, exception.Message);
-                }
-            }
-
-            /// <summary>
-            /// Rethrows an exception raised inside a Unity callback, which Unity would report only as a generic error.
-            /// </summary>
-            public void ThrowIfFailed()
-            {
-                if (_failure != null)
-                {
-                    ExceptionDispatchInfo.Capture(_failure).Throw();
-                }
-            }
-
-            private bool Accept()
-            {
-
-                var responseCode = Request.responseCode;
+                var response = new Response();
+                var responseCode = request.responseCode;
                 if (responseCode < 200 || responseCode >= 300)
                 {
-                    return true;
+                    return response;
                 }
 
-                _accepted = true;
-                var contentLength = ParseLong(Request.GetResponseHeader("Content-Length"));
+                response.IsSuccess = true;
+                var contentLength = ParseLong(request.GetResponseHeader("Content-Length"));
                 if (responseCode == 206)
                 {
-                    if (!TryParseContentRange(Request.GetResponseHeader("Content-Range"), out var start, out var total) ||
-                        start != _resumeSize)
+                    if (!TryParseContentRange(request.GetResponseHeader("Content-Range"), out var start, out var total))
                     {
-                        return Reject(Rejection.RestartFromZero, "the server returned a different byte range.");
+                        return response.Reject(Rejection.RestartFromZero, "the server returned a different byte range.");
                     }
 
-                    if (total.HasValue && _info?.TotalBytes.HasValue == true && total.Value != _info.TotalBytes.Value)
+                    if (attempt.ResumeSize > 0)
                     {
-                        return Reject(Rejection.RestartFromZero, "the remote file changed size.");
+                        if (start != attempt.ResumeSize)
+                        {
+                            return response.Reject(Rejection.RestartFromZero, "the server returned a different byte range.");
+                        }
+
+                        if (total.HasValue && attempt.Info?.TotalBytes.HasValue == true && total.Value != attempt.Info.TotalBytes.Value)
+                        {
+                            return response.Reject(Rejection.RestartFromZero, "the remote file changed size.");
+                        }
+
+                        response.Appends = true;
+                        response.StartOffset = attempt.ResumeSize;
+                        response.TotalBytes = total ?? attempt.Info?.TotalBytes ?? (contentLength.HasValue ? attempt.ResumeSize + contentLength : null);
+                        response._info = attempt.Info;
                     }
-
-                    _totalBytes = total ?? _info?.TotalBytes ?? (contentLength.HasValue ? _resumeSize + contentLength : null);
-                    if (!CheckExpectedSize())
+                    else
                     {
-                        return false;
-                    }
-
-                    // Without a resume there is no partial file to continue; an unsolicited 206 starts a new one.
-                    var mode = _resumeSize > 0 ? FileMode.Append : FileMode.Create;
-                    _fileStream = new FileStream(_partialPath, mode, FileAccess.Write, FileShare.Read);
-                    _downloadedBytes = _resumeSize;
-
-                    // Keep the announced total, so the final size check catches a response that covers only part of the file.
-                    var info = _info ?? CreateInfo();
-                    if (_info == null || info.TotalBytes != _totalBytes)
-                    {
-                        info.TotalBytes = _totalBytes;
-                        JsonStateStore.Save(_infoPath, info);
+                        // Without a resume there is no partial file to continue; an unsolicited 206 starts a new one.
+                        // Keep the announced total, so the final size check catches a body that covers only part of the file.
+                        response.TotalBytes = total ?? contentLength;
+                        response._info = CreateInfo(request, attempt.Url);
                     }
                 }
                 else
                 {
                     // The full body: a fresh download, a server that ignores Range, or a changed file (If-Range).
-                    _totalBytes = contentLength;
-                    if (!CheckExpectedSize())
-                    {
-                        return false;
-                    }
-
-                    // Truncate before saving the new validator, so old bytes never pair with new info.
-                    _fileStream = new FileStream(_partialPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-                    _downloadedBytes = 0;
-                    var info = CreateInfo();
-                    info.TotalBytes = _totalBytes;
-                    JsonStateStore.Save(_infoPath, info);
+                    response.TotalBytes = contentLength;
+                    response._info = CreateInfo(request, attempt.Url);
                 }
 
-                ReportProgress();
-                return true;
-            }
-
-            private PartialDownloadInfo CreateInfo()
-            {
-                return new PartialDownloadInfo
+                if (attempt.ExpectedSizeInBytes.HasValue && response.TotalBytes.HasValue && attempt.ExpectedSizeInBytes.Value != response.TotalBytes.Value)
                 {
-                    Url = _url,
-                    ETag = Request.GetResponseHeader("ETag"),
-                    LastModified = Request.GetResponseHeader("Last-Modified"),
-                };
-            }
-
-            public void CloseFile()
-            {
-                _fileStream?.Dispose();
-                _fileStream = null;
-            }
-
-            protected override void ReceiveContentLengthHeader(ulong contentLength)
-            {
-                EnsureAccepted();
-            }
-
-            protected override bool ReceiveData(byte[] data, int dataLength)
-            {
-                if (!EnsureAccepted())
-                {
-                    return false;
-                }
-
-                if (_fileStream == null || data == null || dataLength <= 0)
-                {
-                    return true;
-                }
-
-                try
-                {
-                    _fileStream.Write(data, 0, dataLength);
-                }
-                catch (Exception exception)
-                {
-                    _failure = exception;
-                    return Reject(Rejection.Failed, exception.Message);
-                }
-
-                _downloadedBytes += dataLength;
-
-                // Large files arrive in tens of thousands of chunks; one report per chunk floods the Editor.
-                if (_sinceProgress.ElapsedMilliseconds >= ProgressIntervalMilliseconds)
-                {
-                    ReportProgress();
-                }
-
-                return true;
-            }
-
-            protected override void CompleteContent()
-            {
-                _fileStream?.Flush();
-                if (_fileStream != null)
-                {
-                    ReportProgress();
-                }
-            }
-
-            private void ReportProgress()
-            {
-                _progress?.Report(new DownloadProgress(_downloadedBytes, _totalBytes));
-                _sinceProgress.Restart();
-            }
-
-            private bool CheckExpectedSize()
-            {
-                if (_expectedSizeInBytes.HasValue && _totalBytes.HasValue && _expectedSizeInBytes.Value != _totalBytes.Value)
-                {
-                    return Reject(
+                    return response.Reject(
                         Rejection.SizeMismatch,
-                        $"The server reports {_totalBytes.Value} bytes for '{Request.url}', but {_expectedSizeInBytes.Value} were expected.");
+                        $"The server reports {response.TotalBytes.Value} bytes for '{attempt.Url}', but {attempt.ExpectedSizeInBytes.Value} were expected.");
                 }
 
-                return true;
+                return response;
             }
 
-            private bool Reject(Rejection rejection, string message)
+            public DownloadProgress Progress(UnityWebRequest request)
             {
-                Rejection = rejection;
-                RejectionMessage = message;
-                return false;
-            }
-
-            private static long? ParseLong(string value)
-            {
-                return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+                return new DownloadProgress(StartOffset + (long)request.downloadedBytes, TotalBytes);
             }
 
             /// <summary>
-            /// Parses <c>bytes start-end/total</c>, where total may be <c>*</c>.
+            /// Appends the segment to the partial file, or moves it into its place, then saves the info that describes
+            /// the result. The info is saved after the bytes, so old bytes never pair with a new validator.
             /// </summary>
-            private static bool TryParseContentRange(string value, out long start, out long? total)
+            public void MergeSegment(Attempt attempt)
             {
-                start = 0;
-                total = null;
-                if (string.IsNullOrWhiteSpace(value) || !value.StartsWith("bytes ", StringComparison.OrdinalIgnoreCase))
+                var hasSegment = File.Exists(attempt.SegmentPath);
+                if (Appends)
                 {
-                    return false;
+                    if (hasSegment)
+                    {
+                        using var source = new FileStream(attempt.SegmentPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024);
+                        using var destination = new FileStream(attempt.PartialPath, FileMode.Append, FileAccess.Write, FileShare.Read, 1024 * 1024);
+                        source.CopyTo(destination, 1024 * 1024);
+                    }
+                }
+                else
+                {
+                    // Remove the info first: an interruption here leaves no info, and a partial file without info is
+                    // discarded instead of resumed with the wrong validator.
+                    DeleteIfExists(attempt.InfoPath);
+                    DeleteIfExists(attempt.PartialPath);
+                    if (hasSegment)
+                    {
+                        File.Move(attempt.SegmentPath, attempt.PartialPath);
+                    }
                 }
 
-                var range = value.Substring("bytes ".Length).Trim();
-                var slash = range.IndexOf('/');
-                var dash = range.IndexOf('-');
-                if (slash < 0 || dash < 0 || dash > slash)
+                if (_info != null && (!Appends || _info.TotalBytes != TotalBytes))
                 {
-                    return false;
+                    _info.TotalBytes = TotalBytes;
+                    JsonStateStore.Save(attempt.InfoPath, _info);
                 }
+            }
 
-                if (!long.TryParse(range.Substring(0, dash), NumberStyles.Integer, CultureInfo.InvariantCulture, out start))
+            private static PartialDownloadInfo CreateInfo(UnityWebRequest request, string url)
+            {
+                return new PartialDownloadInfo
                 {
-                    return false;
-                }
+                    Url = url,
+                    ETag = request.GetResponseHeader("ETag"),
+                    LastModified = request.GetResponseHeader("Last-Modified"),
+                };
+            }
 
-                total = ParseLong(range.Substring(slash + 1));
-                return true;
+            private Response Reject(Rejection rejection, string message)
+            {
+                Rejection = rejection;
+                RejectionMessage = message;
+                return this;
             }
         }
     }
