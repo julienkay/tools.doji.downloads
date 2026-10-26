@@ -159,7 +159,8 @@ namespace Doji.Downloads
                     }
 
                     // Check the headers as soon as they arrive, so a wrong file is not downloaded to the end.
-                    if (response == null && request.responseCode != 0)
+                    // A redirect status shows while Unity follows the redirect; wait for the final response.
+                    if (response == null && request.responseCode != 0 && !IsRedirect(request.responseCode))
                     {
                         response = Response.Read(request, attempt);
                         if (response.Rejection != Rejection.None)
@@ -267,6 +268,11 @@ namespace Doji.Downloads
             }
 
             return info;
+        }
+
+        private static bool IsRedirect(long responseCode)
+        {
+            return responseCode >= 300 && responseCode < 400;
         }
 
         private static bool IsComplete(long size, long? totalBytes, long? expectedSizeInBytes)
