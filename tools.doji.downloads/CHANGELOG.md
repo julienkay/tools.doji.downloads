@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `EditorPersistentOperationRunner` now runs its completion, failure and cancel callbacks, and `EditorPersistentOperationContext.QueueOnMainThread` actions, on `EditorApplication.update` instead of `EditorApplication.delayCall`. `delayCall` does not fire while the Editor is unfocused, so a run driven by the Unity CLI could stay running forever.
+
 ## [1.0.0] - 2026-10-20
 
 ### Added

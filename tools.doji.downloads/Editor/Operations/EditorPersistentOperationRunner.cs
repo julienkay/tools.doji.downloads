@@ -198,7 +198,7 @@ namespace Doji.Downloads.Editor
 
         private static void QueueOnMainThread(Action action)
         {
-            EditorApplication.delayCall += () => action?.Invoke();
+            EditorMainThread.Post(action);
         }
     }
 }

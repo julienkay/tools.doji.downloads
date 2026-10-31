@@ -94,7 +94,12 @@ deletes the state file, so a cancelled operation does not resume, and calls
 `onCanceled` on the main thread. Item logic must let that exception through.
 
 `EditorPersistentOperationContext` reports progress and queues work onto the
-main thread.
+main thread. The runner's callbacks and `QueueOnMainThread` go through the
+internal `EditorMainThread` dispatcher: a `ConcurrentQueue` drained in post
+order on `EditorApplication.update`. It does not use
+`EditorApplication.delayCall`, which stops firing while the Editor is
+unfocused, even when a tool such as the Unity CLI keeps it ticking. A domain
+reload drops queued actions; resume comes from the saved state.
 
 ## Locking
 
