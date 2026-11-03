@@ -4,6 +4,7 @@
   "displayName": "Download Utils",
   "description": "A download utility for asynchronous, resumable background downloads",
   "unity": "6000.3",
+  "unityRelease": "0f1",
   "author": {
     "name": "Doji Technologies",
     "url": "https://docs.doji-tech.com/tools.doji.downloads",
