@@ -5,13 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- `EditorPersistentOperationRunner` now runs its completion, failure and cancel callbacks, and `EditorPersistentOperationContext.QueueOnMainThread` actions, on `EditorApplication.update` instead of `EditorApplication.delayCall`. `delayCall` does not fire while the Editor is unfocused, so a run driven by the Unity CLI could stay running forever.
-
-## [1.0.0] - 2026-10-20
+## [1.0.0] - 2026-11-03
 
 ### Added
 
@@ -22,3 +16,4 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - `EditorPersistentOperationRunner` and `EditorPersistentItemQueueExecutor`: persistent Editor operations that resume after a domain reload, with Background Tasks progress and cancellation. The runner creates and removes its Background Tasks entry; the executor skips items that are no longer pending.
 - `JsonStateStore`: atomic state files; unreadable files throw instead of loading as empty state.
 - User manual: getting started, downloading files, and persistent Editor operations.
+- Offline package documentation in `Documentation~` that links to the online docs.
